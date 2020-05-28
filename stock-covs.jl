@@ -2,7 +2,14 @@
 Predict future stock variances/covariances
 By Kristian Bjarnason
 #%%
-using Pkg, Revise, DataFrames, Impute, CSV, LinearAlgebra, Dates, Statistics, MLJ, MLJBase, MLJModels, MLJLinearModels, Plots, MLBase, StatsBase
+using Pkg, Revise, DataFrames, Impute, CSV, LinearAlgebra, Dates, Statistics, MLJ, MLJBase, MLJModels, MLJLinearModels, Plots, MLBase, StatsBase, MKL
+
+
+@load LassoLarsICRegressor
+
+model_lasso = @pipeline std_lasso(std_model = Standardizer(),
+                                  lasso = LassoLarsICRegressor(criterion = "bic")
+                                  )
 
 #%%md
 Constants
@@ -242,7 +249,10 @@ Set a rolling window with 1,000 observations to estimate the models and to forec
 #%%md
 Lasso
 #%%
+# Pkg.develop(PackageSpec(url="https://github.com/tlienart/OpenSpecFun_jll.jl"))
+
 @load LassoLarsICRegressor
+
 model_lasso = @pipeline std_lasso(std_model = Standardizer(),
                                   lasso = LassoLarsICRegressor(criterion = "bic")
                                   )
@@ -250,37 +260,37 @@ i=1
 j=1
 
 X_train, X_test = db_trans[i:WINDOW_SIZE+i-1,:], db_trans[i+1:WINDOW_SIZE+i,:]
-y_train = y_training[i+1:WINDOW_SIZE+i,j]
+y_train = y_training[i:WINDOW_SIZE+i-1, j]
 
 lasso = machine(model_lasso, X_train, y_train)
 fit!(lasso)
 
-pred_lasso = exp(MLJBase.predict(lasso, X_test))
-
+pred_lasso = MLJBase.predict(lasso, X_test)[WINDOW_SIZE]
 
 #%%
 @load LassoLarsICRegressor
 model_lasso = @pipeline std_lasso(std_model = Standardizer(),
                                   lasso = LassoLarsICRegressor(criterion = "bic")
                                   )
-preds_lasso = Vector{}
-
-for i in 1:length(db_trans[:Date]) - WINDOW_SIZE
-    preds_lasso_daily = Vector{}
+preds_lasso = Vector{}()
+for i in 1:length(dates) - WINDOW_SIZE
+    preds_lasso_daily = Vector{}()
 
     for j in 1:NUM_COVS
         X_train, X_test = db_trans[i:WINDOW_SIZE+i-1,:], db_trans[i+1:WINDOW_SIZE+i,:]
-
-        y_train = y_training[i+1:WINDOW_SIZE+i,j]
+        y_train = db_trans[i:WINDOW_SIZE+i-1, j]
 
         lasso = machine(model_lasso, X_train, y_train)
         fit!(lasso)
 
-        pred_lasso = exp(MLJBase.predict(lasso, X_test))
-        pres_lasso_daily.append(pred_lasso)
+        pred_lasso = MLJBase.predict(lasso, X_test)[WINDOW_SIZE]
+        append!(preds_lasso_daily, pred_lasso)
     end
     preds_lasso.append(preds_lasso_daily)
 end
+
+#reconvert log columns
+preds_lasso[:,1:4] = exp.(preds_lasso[:,1:4])
 
 CSV.Write("preds_lasso.csv", preds_lasso)
 
@@ -292,24 +302,15 @@ Boosted Tree
 model_BT = @pipeline std_BT(std_model = Standardizer(),
                                   BT = GradientBoostingRegressor()
                                   )
-preds_BT = Vector{}
+preds_BT = Vector{}()
 
 for i in 1:length(db_trans[:Date]) - WINDOW_SIZE
-    preds_BT_daily = Vector{}
+    preds_BT_daily = Vector{}()
 
     for j in 1:NUM_COVS
-        X_train, X_test = db_trans[i:WINDOW_SIZE+i-1,:], db_trans[i+1:WINDOW_SIZE+i,:]
-        #TODO find log columns
-        #Use log columns as variance cannot be negative
-        y_train = db_trans[i:WINDOW_SIZE+i-1, j]
 
-        BT = machine(model_BT, X_train, y_train)
-        fit!(BT)
-
-        pred_BT = predict()
-        pres_BT_daily.append(pred_BT)
     end
-    preds_BT.append(preds_BT_daily)
+
 end
 
 CSV.Write("preds_BT.csv", preds_BT)
@@ -322,18 +323,20 @@ Random Forest
 #%%md
 XGBoost
 #%%
-#TODO implement tuning/CV
+#Untuned model
+Conda.add("libnetcdf", "/Users/kristianbjarnason/opt/anaconda3/bin/python")
+
 @load XGBoostRegressor
 model_XGB = @pipeline std_XGB(std_model = Standardizer(),
                                   xgb = XGBoostRegressor()
                                   )
-
+preds_XGB = Array{Float64,2}(undef, length(dates) - WINDOW_SIZE, NUM_COVS)
 for i in 1:length(dates) - WINDOW_SIZE
     preds_XGB_daily = Vector{}()
 
     for j in 1:NUM_COVS
         X_train, X_test = db_trans[i:WINDOW_SIZE+i-1,:], db_trans[i+1:WINDOW_SIZE+i,:]
-        y_train = db_trans[i:WINDOW_SIZE+i-1, j]
+        y_train = y_training[i:WINDOW_SIZE+i-1, j]
 
         XGB = machine(model_XGB, X_train, y_train)
         fit!(XGB)
@@ -341,10 +344,40 @@ for i in 1:length(dates) - WINDOW_SIZE
         pred_XGB = MLJ.predict(XGB, X_test)[WINDOW_SIZE]
         append!(preds_XGB_daily, pred_XGB)
     end
-    append!(preds_XGB, preds_XGB_daily)
+    preds_XGB[i,:] .= preds_XGB_daily
 end
+#reconvert log columns
+preds_XGB[:,1:4] = exp.(preds_XGB[:,1:4])
 
-CSV.Write("preds_XGB.csv", preds_XGB)
+CSV.write("preds_XGB_untuned.csv", DataFrame(preds_XGB))
+
+#%%
+#tuned model
+#TODO tuning
+@load XGBoostRegressor
+model_XGB = @pipeline std_XGB(std_model = Standardizer(),
+                                  xgb = XGBoostRegressor()
+                                  )
+preds_XGB = Array{Float64,2}(undef, length(dates) - WINDOW_SIZE, NUM_COVS)
+for i in 1:length(dates) - WINDOW_SIZE
+    preds_XGB_daily = Vector{}()
+
+    for j in 1:NUM_COVS
+        X_train, X_test = db_trans[i:WINDOW_SIZE+i-1,:], db_trans[i+1:WINDOW_SIZE+i,:]
+        y_train = y_training[i:WINDOW_SIZE+i-1, j]
+
+        XGB = machine(model_XGB, X_train, y_train)
+        fit!(XGB)
+
+        pred_XGB = MLJ.predict(XGB, X_test)[WINDOW_SIZE]
+        append!(preds_XGB_daily, pred_XGB)
+    end
+    preds_XGB[i,:] .= preds_XGB_daily
+end
+#reconvert log columns
+preds_XGB[:,1:4] = exp.(preds_XGB[:,1:4])
+
+CSV.write("preds_XGB_tuned.csv", preds_XGB)
 
 #%%md
 All Predictions
@@ -353,7 +386,7 @@ All Predictions
 #%%md
 Plot Predictions
 #%%
-plot(db[WINDOW_SIZE+1:,:])
+plot(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS]))
 plot(preds_lasso)
 plot(preds_BT
 plot(preds_RF)
@@ -364,26 +397,19 @@ Checking fit (RMSs, MAEs, R-Squared scores)
 #%%md
 RMSs
 #%%
-MLJBase.rms(preds_lasso, db[WINDOW_SIZE+1:,:])
-MLJBase.rms(preds_BT, db[WINDOW_SIZE+1:,:])
-MLJBase.rms(preds_RF, db[WINDOW_SIZE+1:,:])
-MLJBase.rms(preds_XGB, db[WINDOW_SIZE+1:,:])
+MLJBase.rms(vec(preds_lasso), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
+MLJBase.rms(vec(preds_BT), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
+MLJBase.rms(vec(preds_RF), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
+MLJBase.rms(vec(preds_XGB), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
 
 #%%md
 MAEs
 #%%
-MLJBase.mae(preds_lasso, db[WINDOW_SIZE+1:,:])
-MLJBase.mae(preds_BT, db[WINDOW_SIZE+1:,:])
-MLJBase.mae(preds_RF, db[WINDOW_SIZE+1:,:])
-MLJBase.mae(preds_XGB, db[WINDOW_SIZE+1:,:])
+MLJBase.mae(vec(preds_lasso), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
+MLJBase.mae(vec(preds_BT), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
+MLJBase.mae(vec(preds_RF), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
+MLJBase.mae(vec(preds_XGB), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
 
-#%%md
-R-Squared scores
-#%%
-r2(preds_lasso, db[WINDOW_SIZE+1:,:])
-r2(preds_BT, db[WINDOW_SIZE+1:,:])
-r2(preds_RF, db[WINDOW_SIZE+1:,:])
-r2(preds_XGB, db[WINDOW_SIZE+1:,:])
 
 
 
