@@ -2,7 +2,7 @@
 Predict future stock variances/covariances
 By Kristian Bjarnason
 #%%
-using Pkg, Revise, DataFrames, Impute, CSV, LinearAlgebra, Dates, Statistics, MLJ, MLJBase, MLJModels, MLJLinearModels, Plots, Flux, MLBase, StatsBase
+using Pkg, Revise, DataFrames, Impute, CSV, LinearAlgebra, Dates, Statistics, MLJ, MLJBase, MLJModels, MLJLinearModels, Plots, MLBase, StatsBase
 
 #%%md
 Constants
@@ -14,18 +14,18 @@ const startDate = Date("2008-01-01")
 #%%md
 Functions
 #%%
-#sum log difference of every 5th item in a 1-dimensional array/vector
-function every_fifth_log_diff_sq(x)
+#sum log difference of every 5th item multiplied across 2 1-dimensional array/vectors (for cov/var calcs)
+function every_fifth_log_diff_mult(x,y)
     r = similar(x)
     for i in 1:5
         r[i] = 0.0
     end
     for i in 6:length(x)
         if 1 % 5 == 1
-            if x[i] == NaN || x[i-5] == NaN
+            if x[i] == NaN || x[i-5] == NaN || y[i] == NaN || y[i-5] == NaN
                 r[i] = 0.0
             else
-                r[i] = (log(x[i]) - log(x[i-5]))^2
+                r[i] = (log(x[i]) - log(x[i-5])) * (log(y[i]) - log(y[i-5]))
             end
         else
             r[i] = 0.0
@@ -107,6 +107,7 @@ for comp in comps
     filter!(row -> row[:Date] >= startDate, comp)
     #create log return column
     insert!(comp, ncol(comp)+1, 0.0, :LR)
+
 end
 
 allDates = Vector{Date}()
@@ -137,37 +138,13 @@ for (x,comp) in enumerate(comps)
 end
 
 #%%md
-Using closing prices, compute the realized variance (RV) for each day using 5-minute log returns.
+Using closing prices, compute the realized covariance matrix (RC) for each day using 5-minute log returns.
 Note that there are 78 price observations each day.
-#%%
-RVs = DataFrame(Date = Date[])
-append!(RVs[:Date], unique(comps[1][:Date]))
-
-for (x,comp) in enumerate(comps)
-    compname_RV = compnames[x] * " RV"
-    insert!(RVs, ncol(RVs)+1, 0.0, Symbol(compname_RV))
-    for (i,date) in enumerate(allDates)
-        RVs[i, Symbol(compname_RV)] = every_fifth_log_diff_sq(groupby(comps[x], :Date)[(Date=date,)][:Close])
-    end
-end
-
-###TESTING###
-# x=1
-# compname_RV = compnames[x] * " RV"
-# insert!(RVs, ncol(RVs)+1, 0.0, Symbol(compname_RV))
-#
-# date = allDates[1]
-# vec(groupby(comps[1], :Date)[(Date=date,)][:Close])
-#
-# RVs[Symbol(compname_RV)]
-#
-# every_fifth_log_diff_sq(groupby(comps[1], :Date)[(Date=date,)][:Close])
-
 #%% md
-Compute the realized covariance matrix of the vector of 5-minute returns
+Compute the of the vector of 5-minute returns
 #%%
-Covs = DataFrame(Date = Date[])
-append!(Covs[:Date], unique(comps[1][:Date]))
+RCs = DataFrame(Date = Date[])
+append!(RCs[:Date], unique(comps[1][:Date]))
 
 for (x,comp) in enumerate(comps)
     for y in x:length(comps)
@@ -177,102 +154,88 @@ for (x,comp) in enumerate(comps)
         comp1_name = compnames[x]
         comp2_name = compnames[y]
 
-        insert!(Covs, ncol(Covs)+1, 0.0, Symbol(comp1_name * "-" * comp2_name * " Cov"))
+        insert!(RCs, ncol(RCs)+1, 0.0, Symbol(comp1_name * "-" * comp2_name * " RC"))
 
         for (i,date) in enumerate(allDates)
-            Covs[i, Symbol(comp1_name * "-" * comp2_name * " Cov")] = cov(groupby(comps[x], :Date)[(Date=date,)][:Close],groupby(comps[y], :Date)[(Date=date,)][:Close])
+            RCs[i, Symbol(comp1_name * "-" * comp2_name * " RC")] = every_fifth_log_diff_mult(groupby(comps[x], :Date)[(Date=date,)][:Close], groupby(comps[y], :Date)[(Date=date,)][:Close])
         end
     end
 end
-
-###TESTING###
-# x=1
-# y=2
-# comp_1 = comps[x]
-# comp_2 = comps[y]
-#
-# comp1_name = compnames[x]
-# comp2_name = compnames[y]
-#
-# insert!(Covs, ncol(Covs)+1, 0.0, Symbol(comp1_name * "-" * comp2_name * " Cov"))
-#
-# for (i,date) in enumerate(allDates)
-#     Covs[i, Symbol(comp1_name * "-" * comp2_name * " Cov")] = cov(groupby(comps[x], :Date)[(Date=date,)][:Close],groupby(comps[y], :Date)[(Date=date,)][:Close])
-# end
-#
-# Covs
-
 #%%md
 Compute the trading volume over the day by summing the 1-minute volumes
 #%%
 TVs = DataFrame(Date = Date[])
 append!(TVs[:Date], unique(comps[1][:Date]))
 
-for (x,comp) in enumerate(comps):
+for (x,comp) in enumerate(comps)
     comp_name = compnames[x]
 
-    insert!(TVs, ncol(TVs)+1, 0.0, Symbol(comp_name * ' TV'))
+    insert!(TVs, ncol(TVs)+1, 0.0, Symbol(comp_name * " TV"))
 
-    for date in allDates
-        if str(date) == "NaT"
-            continue
-        else
-            TVs['Date']
-        end
+    for (i,date) in enumerate(allDates)
+        TVs[i, Symbol(comp_name * " TV")] = sum(groupby(comps[x], :Date)[(Date=date,)][:Volume])
     end
 end
-
-###TESTING###
-x=1
-TVs = DataFrame(Date = Date[])
-append!(TVs[:Date], unique(comps[1][:Date]))
-
-comp_name = compnames[x]
-insert!(TVs, ncol(TVs)+1, 0.0, Symbol(comp_name * ' TV'))
-
-for (i,date) in enumerate(allDates)
-    if String(date) == "NaT"
-        continue
-    else
-        TVs[i, Symbol(comp_name * ' TV')] = sum(groupby(comps[x], :Date)[(Date=date,)][:Volume])
-    end
-end
-TVs
 
 #%%md
 Construct a database consisting of the RVs and trading volumes of each security starting in January 2008 and running until the end of the sample.
 #%%
-db = merge(Covs, TVs, on=:Date, how=:outer)
+db =  join(RCs, TVs, on=:Date)
 
-CSV.Write("db.csv",db)
+CSV.write("db.csv",db)
 
 #%%md
 Import db
 #%%
 cd("/Users/kristianbjarnason/Documents/Programming/Data/stocks-cov:var/")
-db = CSV.Read("db.csv")
+db = CSV.read("db.csv")
+
+#extract dates
+dates = db.Date
+
+#remove dates from df
+select!(db, Not(:Date))
 
 #%%md
 Consider four different models to forecast future values of the 4×4 realized covariance matrix. One linear penalized regression (LASSO), one Boosted Tree, one Random Forest and one eXtreme Gradient Boosting machine (XGB).
 #%%md
 Transformations
 #%%
-for col in colnames(db)
-    db[:col + ' sq'] = db[:col]^2
-    db[:col + ' log'] = np.log(db[:col])
-    db[:col + ' delta'] = db[:col].diff()
-    db[:col + ' delta'].fillna(0, inplace = True)
-    db[:col + ' sqrt'] = db[:col]**0.5
-
 db_trans = db
 
-CSV.Write("db_trans.csv", db_trans)
+for col in names(db_trans)
+    col = string(col)
+    if col in ("IBM-IBM RC", "JPM-JPM RC", "SPY-SPY RC", "XOM-XOM RC")
+        db_trans[Symbol(col * " log")] = log.(db[Symbol(col)])
+        db_trans[Symbol(col * " sqrt")] = db[Symbol(col)].^0.5
+    end
+    db_trans[Symbol(col * " sq")] = db[Symbol(col)].^2
+    db_trans[Symbol(col * " delta")] = vcat(0.0, diff(db[Symbol(col)]))
+end
+
+CSV.write("db_trans.csv", db_trans)
 
 #%%md
 Import db_trans
 #%%
 cd("/Users/kristianbjarnason/Documents/Programming/Data/stocks-cov:var/")
-db_trans = CSV.Read("db_trans.csv")
+db_trans = CSV.read("db_trans.csv")
+db = CSV.read("db.csv")
+#extract dates
+dates = db.Date
+
+ys = [Symbol("IBM-IBM RC log"),
+      Symbol("JPM-JPM RC log"),
+      Symbol("SPY-SPY RC log"),
+      Symbol("XOM-XOM RC log"),
+      Symbol("IBM-JPM RC"),
+      Symbol("IBM-SPY RC"),
+      Symbol("IBM-XOM RC"),
+      Symbol("JPM-SPY RC"),
+      Symbol("JPM-XOM RC"),
+      Symbol("SPY-XOM RC")]
+
+y_training = db_trans[:,ys]
 
 #%%md
 Set a rolling window with 1,000 observations to estimate the models and to forecast the next day observation. Re-estimate the models for each new window.
@@ -283,19 +246,37 @@ Lasso
 model_lasso = @pipeline std_lasso(std_model = Standardizer(),
                                   lasso = LassoLarsICRegressor(criterion = "bic")
                                   )
+i=1
+j=1
+
+X_train, X_test = db_trans[i:WINDOW_SIZE+i-1,:], db_trans[i+1:WINDOW_SIZE+i,:]
+y_train = y_training[i+1:WINDOW_SIZE+i,j]
+
+lasso = machine(model_lasso, X_train, y_train)
+fit!(lasso)
+
+pred_lasso = exp(MLJBase.predict(lasso, X_test))
+
+
+#%%
+@load LassoLarsICRegressor
+model_lasso = @pipeline std_lasso(std_model = Standardizer(),
+                                  lasso = LassoLarsICRegressor(criterion = "bic")
+                                  )
 preds_lasso = Vector{}
 
 for i in 1:length(db_trans[:Date]) - WINDOW_SIZE
     preds_lasso_daily = Vector{}
 
-    for j in 1:NUM_COVS:
-        X_train, X_test = db_trans[i:WINDOW_SIZE+i,:], db_trans[i+1:WINDOW_SIZE+i+1,:]
-        y_train = db_trans[i:WINDOW_SIZE+i, j]
+    for j in 1:NUM_COVS
+        X_train, X_test = db_trans[i:WINDOW_SIZE+i-1,:], db_trans[i+1:WINDOW_SIZE+i,:]
+
+        y_train = y_training[i+1:WINDOW_SIZE+i,j]
 
         lasso = machine(model_lasso, X_train, y_train)
         fit!(lasso)
 
-        pred_lasso = MLJBase.predict(lasso, X_test)
+        pred_lasso = exp(MLJBase.predict(lasso, X_test))
         pres_lasso_daily.append(pred_lasso)
     end
     preds_lasso.append(preds_lasso_daily)
@@ -309,16 +290,18 @@ Boosted Tree
 #TODO implement tuning/CV
 @load GradientBoostingRegressor
 model_BT = @pipeline std_BT(std_model = Standardizer(),
-                                  lasso = GradientBoostingRegressor()
+                                  BT = GradientBoostingRegressor()
                                   )
 preds_BT = Vector{}
 
 for i in 1:length(db_trans[:Date]) - WINDOW_SIZE
     preds_BT_daily = Vector{}
 
-    for j in 1:NUM_COVS:
-        X_train, X_test = db_trans[i:WINDOW_SIZE+i,:], db_trans[i+1:WINDOW_SIZE+i+1,:]
-        y_train = db_trans[i:WINDOW_SIZE+i, j]
+    for j in 1:NUM_COVS
+        X_train, X_test = db_trans[i:WINDOW_SIZE+i-1,:], db_trans[i+1:WINDOW_SIZE+i,:]
+        #TODO find log columns
+        #Use log columns as variance cannot be negative
+        y_train = db_trans[i:WINDOW_SIZE+i-1, j]
 
         BT = machine(model_BT, X_train, y_train)
         fit!(BT)
@@ -339,7 +322,29 @@ Random Forest
 #%%md
 XGBoost
 #%%
+#TODO implement tuning/CV
+@load XGBoostRegressor
+model_XGB = @pipeline std_XGB(std_model = Standardizer(),
+                                  xgb = XGBoostRegressor()
+                                  )
 
+for i in 1:length(dates) - WINDOW_SIZE
+    preds_XGB_daily = Vector{}()
+
+    for j in 1:NUM_COVS
+        X_train, X_test = db_trans[i:WINDOW_SIZE+i-1,:], db_trans[i+1:WINDOW_SIZE+i,:]
+        y_train = db_trans[i:WINDOW_SIZE+i-1, j]
+
+        XGB = machine(model_XGB, X_train, y_train)
+        fit!(XGB)
+
+        pred_XGB = MLJ.predict(XGB, X_test)[WINDOW_SIZE]
+        append!(preds_XGB_daily, pred_XGB)
+    end
+    append!(preds_XGB, preds_XGB_daily)
+end
+
+CSV.Write("preds_XGB.csv", preds_XGB)
 
 #%%md
 All Predictions
@@ -348,7 +353,7 @@ All Predictions
 #%%md
 Plot Predictions
 #%%
-plot(db_trans[WINDOW_SIZE+1:,:10])
+plot(db[WINDOW_SIZE+1:,:])
 plot(preds_lasso)
 plot(preds_BT
 plot(preds_RF)
@@ -359,30 +364,26 @@ Checking fit (RMSs, MAEs, R-Squared scores)
 #%%md
 RMSs
 #%%
-MLJBase.rms(preds_lasso, db_trans[WINDOW_SIZE+1:,:10])
-MLJBase.rms(preds_BT, db_trans[WINDOW_SIZE+1:,:10])
-MLJBase.rms(preds_RF, db_trans[WINDOW_SIZE+1:,:10])
-MLJBase.rms(preds_XGB, db_trans[WINDOW_SIZE+1:,:10])
+MLJBase.rms(preds_lasso, db[WINDOW_SIZE+1:,:])
+MLJBase.rms(preds_BT, db[WINDOW_SIZE+1:,:])
+MLJBase.rms(preds_RF, db[WINDOW_SIZE+1:,:])
+MLJBase.rms(preds_XGB, db[WINDOW_SIZE+1:,:])
 
 #%%md
 MAEs
 #%%
-MLJBase.mae(preds_lasso, db_trans[WINDOW_SIZE+1:,:10])
-MLJBase.mae(preds_BT, db_trans[WINDOW_SIZE+1:,:10])
-MLJBase.mae(preds_RF, db_trans[WINDOW_SIZE+1:,:10])
-MLJBase.mae(preds_XGB, db_trans[WINDOW_SIZE+1:,:10])
+MLJBase.mae(preds_lasso, db[WINDOW_SIZE+1:,:])
+MLJBase.mae(preds_BT, db[WINDOW_SIZE+1:,:])
+MLJBase.mae(preds_RF, db[WINDOW_SIZE+1:,:])
+MLJBase.mae(preds_XGB, db[WINDOW_SIZE+1:,:])
 
 #%%md
 R-Squared scores
 #%%
-r2(preds_lasso, db_trans[WINDOW_SIZE+1:,:10])
-r2(preds_BT, db_trans[WINDOW_SIZE+1:,:10])
-r2(preds_RF, db_trans[WINDOW_SIZE+1:,:10])
-r2(preds_XGB, db_trans[WINDOW_SIZE+1:,:10])
-
-
-
-
+r2(preds_lasso, db[WINDOW_SIZE+1:,:])
+r2(preds_BT, db[WINDOW_SIZE+1:,:])
+r2(preds_RF, db[WINDOW_SIZE+1:,:])
+r2(preds_XGB, db[WINDOW_SIZE+1:,:])
 
 
 
