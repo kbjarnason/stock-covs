@@ -2,14 +2,14 @@
 Predict future stock variances/covariances
 By Kristian Bjarnason
 #%%
-using Pkg, Revise, DataFrames, Impute, CSV, LinearAlgebra, Dates, Statistics, MLJ, MLJBase, MLJModels, MLJLinearModels, Plots, MLBase, StatsBase, MKL
+using Pkg, Revise, DataFrames, Impute, CSV, LinearAlgebra, Dates, Statistics, MLJ, MLJBase, MLJModels, MLJLinearModels, Plots, MLBase, StatsBase, ScikitLearn
 
+ENV["PYTHON"] = "/Users/kristianbjarnason/opt/anaconda3/bin/python"
 
-@load LassoLarsICRegressor
+@load LassoLarsICRegressor verbosity=1
 
-model_lasso = @pipeline std_lasso(std_model = Standardizer(),
-                                  lasso = LassoLarsICRegressor(criterion = "bic")
-                                  )
+@sk_import linear: LassoLarsICRegressor
+
 
 #%%md
 Constants
@@ -297,35 +297,88 @@ CSV.Write("preds_lasso.csv", preds_lasso)
 #%%md
 Boosted Tree
 #%%
-#TODO implement tuning/CV
+#tuned model (tuning eta/learning rate and max depth)
 @load GradientBoostingRegressor
 model_BT = @pipeline std_BT(std_model = Standardizer(),
-                                  BT = GradientBoostingRegressor()
+                                  BT = GradiendBoostingRegressor()
                                   )
-preds_BT = Vector{}()
 
-for i in 1:length(db_trans[:Date]) - WINDOW_SIZE
+r1 = range(model_BT, :(BT.eta), lower=0.005, upper=0.05, scale=:linear);
+r2 = range(model_BT, :(BT.max_depth), lower=5, upper=15, scale = :linear);
+
+self_tuning_BT_model = TunedModel(model=model_BT,
+                                      tuning=Grid(goal=10),
+                                      resampling=CV(nfolds=3),
+                                      range=[(r1,3), (r2,3)],
+                                      measure=rms
+                                      )
+
+preds_BT = Array{Float64,2}(undef, length(dates) - WINDOW_SIZE, NUM_COVS)
+for i in 1:length(dates) - WINDOW_SIZE
     preds_BT_daily = Vector{}()
 
     for j in 1:NUM_COVS
+        X_train, X_test = db_trans[i:WINDOW_SIZE+i-1,:], db_trans[i+1:WINDOW_SIZE+i,:]
+        y_train = y_training[i:WINDOW_SIZE+i-1, j]
 
+        self_tuning_BT = machine(self_tuning_BT_model, X_train, y_train)
+        MLJBase.fit!(self_tuning_BT)
+
+        pred_BT = MLJ.predict(self_tuning_BT, X_test)[WINDOW_SIZE]
+        append!(preds_BT_daily, pred_BT)
     end
-
+    preds_BT[i,:] .= preds_BT_daily
 end
+#reconvert log columns
+preds_BT[:,1:4] = exp.(preds_BT[:,1:4])
 
-CSV.Write("preds_BT.csv", preds_BT)
+CSV.write("preds_BT_tuned.csv", DataFrame(preds_BT))
+preds_BT
 
 #%%md
 Random Forest
 #%%
+@load RandomForestRegressor
+model_RF = @pipeline std_RF(std_model = Standardizer(),
+                                  RF = GradiendBoostingRegressor()
+                                  )
 
+r1 = range(model_RF, :(RF.eta), lower=0.005, upper=0.05, scale=:linear);
+r2 = range(model_RF, :(RF.max_depth), lower=5, upper=15, scale = :linear);
+
+self_tuning_RF_model = TunedModel(model=model_RF,
+                                      tuning=Grid(goal=10),
+                                      resampling=CV(nfolds=3),
+                                      range=[(r1,3), (r2,3)],
+                                      measure=rms
+                                      )
+
+preds_RF = Array{Float64,2}(undef, length(dates) - WINDOW_SIZE, NUM_COVS)
+for i in 1:length(dates) - WINDOW_SIZE
+    preds_RF_daily = Vector{}()
+
+    for j in 1:NUM_COVS
+        X_train, X_test = db_trans[i:WINDOW_SIZE+i-1,:], db_trans[i+1:WINDOW_SIZE+i,:]
+        y_train = y_training[i:WINDOW_SIZE+i-1, j]
+
+        self_tuning_RF = machine(self_tuning_RF_model, X_train, y_train)
+        MLJBase.fit!(self_tuning_RF)
+
+        pred_RF = MLJ.predict(self_tuning_RF, X_test)[WINDOW_SIZE]
+        append!(preds_RF_daily, pred_RF)
+    end
+    preds_RF[i,:] .= preds_RF_daily
+end
+#reconvert log columns
+preds_RF[:,1:4] = exp.(preds_RF[:,1:4])
+
+CSV.write("preds_RF_tuned.csv", DataFrame(preds_RF))
+preds_RF
 
 #%%md
 XGBoost
 #%%
 #Untuned model
-Conda.add("libnetcdf", "/Users/kristianbjarnason/opt/anaconda3/bin/python")
-
 @load XGBoostRegressor
 model_XGB = @pipeline std_XGB(std_model = Standardizer(),
                                   xgb = XGBoostRegressor()
@@ -352,12 +405,22 @@ preds_XGB[:,1:4] = exp.(preds_XGB[:,1:4])
 CSV.write("preds_XGB_untuned.csv", DataFrame(preds_XGB))
 
 #%%
-#tuned model
-#TODO tuning
+#tuned model (tuning eta/learning rate and max depth)
 @load XGBoostRegressor
 model_XGB = @pipeline std_XGB(std_model = Standardizer(),
                                   xgb = XGBoostRegressor()
                                   )
+
+r1 = range(model_XGB, :(xgb.eta), lower=0.005, upper=0.05, scale=:linear);
+r2 = range(model_XGB, :(xgb.max_depth), lower=5, upper=15, scale = :linear);
+
+self_tuning_xgb_model = TunedModel(model=model_XGB,
+                                      tuning=Grid(goal=10),
+                                      resampling=CV(nfolds=3),
+                                      range=[(r1,3), (r2,3)],
+                                      measure=rms
+                                      )
+
 preds_XGB = Array{Float64,2}(undef, length(dates) - WINDOW_SIZE, NUM_COVS)
 for i in 1:length(dates) - WINDOW_SIZE
     preds_XGB_daily = Vector{}()
@@ -366,10 +429,10 @@ for i in 1:length(dates) - WINDOW_SIZE
         X_train, X_test = db_trans[i:WINDOW_SIZE+i-1,:], db_trans[i+1:WINDOW_SIZE+i,:]
         y_train = y_training[i:WINDOW_SIZE+i-1, j]
 
-        XGB = machine(model_XGB, X_train, y_train)
-        fit!(XGB)
+        self_tuning_XGB = machine(self_tuning_xgb_model, X_train, y_train)
+        MLJBase.fit!(self_tuning_XGB)
 
-        pred_XGB = MLJ.predict(XGB, X_test)[WINDOW_SIZE]
+        pred_XGB = MLJ.predict(self_tuning_XGB, X_test)[WINDOW_SIZE]
         append!(preds_XGB_daily, pred_XGB)
     end
     preds_XGB[i,:] .= preds_XGB_daily
@@ -377,11 +440,8 @@ end
 #reconvert log columns
 preds_XGB[:,1:4] = exp.(preds_XGB[:,1:4])
 
-CSV.write("preds_XGB_tuned.csv", preds_XGB)
-
-#%%md
-All Predictions
-#%%
+CSV.write("preds_XGB_tuned.csv", DataFrame(preds_XGB))
+preds_XGB
 
 #%%md
 Plot Predictions
