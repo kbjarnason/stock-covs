@@ -315,7 +315,7 @@ preds_BT = Array{Float64,2}(undef, length(dates) - WINDOW_SIZE, NUM_COVS)
 preds_RF = Array{Float64,2}(undef, length(dates) - WINDOW_SIZE, NUM_COVS)
 preds_XGB = Array{Float64,2}(undef, length(dates) - WINDOW_SIZE, NUM_COVS)
 
-for i in 1:2#length(dates) - WINDOW_SIZE
+for i in 1:length(dates) - WINDOW_SIZE
     preds_lasso_daily = Vector{}()
     preds_BT_daily = Vector{}()
     preds_RF_daily = Vector{}()
@@ -387,11 +387,6 @@ MLJBase.mae(vec(preds_lasso), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_C
 MLJBase.mae(vec(preds_BT), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
 MLJBase.mae(vec(preds_RF), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
 MLJBase.mae(vec(preds_XGB), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
-
-
-
-
-
 
 #%%md
 want the stuff below?? maybe implement later...
