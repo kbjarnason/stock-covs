@@ -2,14 +2,7 @@
 Predict future stock variances/covariances
 By Kristian Bjarnason
 #%%
-using Pkg, Revise, DataFrames, Impute, CSV, LinearAlgebra, Dates, Statistics, MLJ, MLJBase, MLJModels, MLJLinearModels, Plots, MLBase, StatsBase, ScikitLearn
-
-ENV["PYTHON"] = "/Users/kristianbjarnason/opt/anaconda3/bin/python"
-
-@load LassoLarsICRegressor verbosity=1
-
-@sk_import linear: LassoLarsICRegressor
-
+using Pkg, Revise, DataFrames, Impute, CSV, LinearAlgebra, Dates, Statistics, MLJ, MLJBase, MLJModels, MLJLinearModels, Plots, MLBase, StatsBase
 
 #%%md
 Constants
@@ -263,7 +256,7 @@ X_train, X_test = db_trans[i:WINDOW_SIZE+i-1,:], db_trans[i+1:WINDOW_SIZE+i,:]
 y_train = y_training[i:WINDOW_SIZE+i-1, j]
 
 lasso = machine(model_lasso, X_train, y_train)
-fit!(lasso)
+MLJBase.fit!(lasso)
 
 pred_lasso = MLJBase.predict(lasso, X_test)[WINDOW_SIZE]
 
@@ -272,7 +265,7 @@ pred_lasso = MLJBase.predict(lasso, X_test)[WINDOW_SIZE]
 model_lasso = @pipeline std_lasso(std_model = Standardizer(),
                                   lasso = LassoLarsICRegressor(criterion = "bic")
                                   )
-Array{Float64,2}(undef, length(dates) - WINDOW_SIZE, NUM_COVS)
+preds_lasso = Array{Float64,2}(undef, length(dates) - WINDOW_SIZE, NUM_COVS)
 for i in 1:length(dates) - WINDOW_SIZE
     preds_lasso_daily = Vector{}()
 
@@ -281,12 +274,13 @@ for i in 1:length(dates) - WINDOW_SIZE
         y_train = db_trans[i:WINDOW_SIZE+i-1, j]
 
         lasso = machine(model_lasso, X_train, y_train)
-        fit!(lasso)
+        MLJBase.fit!(lasso)
 
         pred_lasso = MLJBase.predict(lasso, X_test)[WINDOW_SIZE]
+        #TODO unstandardise
         append!(preds_lasso_daily, pred_lasso)
     end
-    preds_lasso.append(preds_lasso_daily)
+    preds_lasso[i,:] .= preds_lasso_daily
 end
 
 #reconvert log columns
@@ -300,10 +294,10 @@ Boosted Tree
 #tuned model (tuning eta/learning rate and max depth)
 @load GradientBoostingRegressor
 model_BT = @pipeline std_BT(std_model = Standardizer(),
-                                  BT = GradiendBoostingRegressor()
+                                  BT = GradientBoostingRegressor()
                                   )
 
-r1 = range(model_BT, :(BT.eta), lower=0.005, upper=0.05, scale=:linear);
+r1 = range(model_BT, :(BT.n_estimators), lower=100, upper=500, scale=:linear);
 r2 = range(model_BT, :(BT.max_depth), lower=5, upper=15, scale = :linear);
 
 self_tuning_BT_model = TunedModel(model=model_BT,
@@ -325,6 +319,7 @@ for i in 1:length(dates) - WINDOW_SIZE
         MLJBase.fit!(self_tuning_BT)
 
         pred_BT = MLJ.predict(self_tuning_BT, X_test)[WINDOW_SIZE]
+        #TODO unstandardise
         append!(preds_BT_daily, pred_BT)
     end
     preds_BT[i,:] .= preds_BT_daily
@@ -336,74 +331,7 @@ CSV.write("preds_BT_tuned.csv", DataFrame(preds_BT))
 preds_BT
 
 #%%md
-Random Forest
-#%%
-@load RandomForestRegressor
-model_RF = @pipeline std_RF(std_model = Standardizer(),
-                                  RF = GradiendBoostingRegressor()
-                                  )
-
-r1 = range(model_RF, :(RF.eta), lower=0.005, upper=0.05, scale=:linear);
-r2 = range(model_RF, :(RF.max_depth), lower=5, upper=15, scale = :linear);
-
-self_tuning_RF_model = TunedModel(model=model_RF,
-                                      tuning=Grid(goal=10),
-                                      resampling=CV(nfolds=3),
-                                      range=[(r1,3), (r2,3)],
-                                      measure=rms
-                                      )
-
-preds_RF = Array{Float64,2}(undef, length(dates) - WINDOW_SIZE, NUM_COVS)
-for i in 1:length(dates) - WINDOW_SIZE
-    preds_RF_daily = Vector{}()
-
-    for j in 1:NUM_COVS
-        X_train, X_test = db_trans[i:WINDOW_SIZE+i-1,:], db_trans[i+1:WINDOW_SIZE+i,:]
-        y_train = y_training[i:WINDOW_SIZE+i-1, j]
-
-        self_tuning_RF = machine(self_tuning_RF_model, X_train, y_train)
-        MLJBase.fit!(self_tuning_RF)
-
-        pred_RF = MLJ.predict(self_tuning_RF, X_test)[WINDOW_SIZE]
-        append!(preds_RF_daily, pred_RF)
-    end
-    preds_RF[i,:] .= preds_RF_daily
-end
-#reconvert log columns
-preds_RF[:,1:4] = exp.(preds_RF[:,1:4])
-
-CSV.write("preds_RF_tuned.csv", DataFrame(preds_RF))
-preds_RF
-
-#%%md
 XGBoost
-#%%
-#Untuned model
-@load XGBoostRegressor
-model_XGB = @pipeline std_XGB(std_model = Standardizer(),
-                                  xgb = XGBoostRegressor()
-                                  )
-preds_XGB = Array{Float64,2}(undef, length(dates) - WINDOW_SIZE, NUM_COVS)
-for i in 1:length(dates) - WINDOW_SIZE
-    preds_XGB_daily = Vector{}()
-
-    for j in 1:NUM_COVS
-        X_train, X_test = db_trans[i:WINDOW_SIZE+i-1,:], db_trans[i+1:WINDOW_SIZE+i,:]
-        y_train = y_training[i:WINDOW_SIZE+i-1, j]
-
-        XGB = machine(model_XGB, X_train, y_train)
-        fit!(XGB)
-
-        pred_XGB = MLJ.predict(XGB, X_test)[WINDOW_SIZE]
-        append!(preds_XGB_daily, pred_XGB)
-    end
-    preds_XGB[i,:] .= preds_XGB_daily
-end
-#reconvert log columns
-preds_XGB[:,1:4] = exp.(preds_XGB[:,1:4])
-
-CSV.write("preds_XGB_untuned.csv", DataFrame(preds_XGB))
-
 #%%
 #tuned model (tuning eta/learning rate and max depth)
 @load XGBoostRegressor
@@ -411,7 +339,7 @@ model_XGB = @pipeline std_XGB(std_model = Standardizer(),
                                   xgb = XGBoostRegressor()
                                   )
 
-r1 = range(model_XGB, :(xgb.n_estimators), lower=100, upper=500, scale=:linear);
+r1 = range(model_XGB, :(xgb.eta), lower=0.005, upper=0.5, scale=:linear);
 r2 = range(model_XGB, :(xgb.max_depth), lower=5, upper=15, scale = :linear);
 
 self_tuning_xgb_model = TunedModel(model=model_XGB,
@@ -422,7 +350,7 @@ self_tuning_xgb_model = TunedModel(model=model_XGB,
                                       )
 
 preds_XGB = Array{Float64,2}(undef, length(dates) - WINDOW_SIZE, NUM_COVS)
-for i in 1:length(dates) - WINDOW_SIZE
+for i in 1:2
     preds_XGB_daily = Vector{}()
 
     for j in 1:NUM_COVS
@@ -432,7 +360,8 @@ for i in 1:length(dates) - WINDOW_SIZE
         self_tuning_XGB = machine(self_tuning_xgb_model, X_train, y_train)
         MLJBase.fit!(self_tuning_XGB)
 
-        pred_XGB = MLJ.predict(self_tuning_XGB, X_test)[WINDOW_SIZE]
+        std_pred_XGB = MLJ.predict(self_tuning_XGB, X_test)
+        pred_XGB = MLJ.inverse_transform(model_XGB.std_model, std_pred_XGB)[WINDOW_SIZE]
         append!(preds_XGB_daily, pred_XGB)
     end
     preds_XGB[i,:] .= preds_XGB_daily
@@ -511,12 +440,17 @@ for i in 1:length(dates) - WINDOW_SIZE
         MLJBase.fit!(self_tuning_RF)
         MLJBase.fit!(self_tuning_XGB)
 
-        pred_lasso = MLJ.predict(self_tuning_XGB, X_test)[WINDOW_SIZE]
-        pred_BT = MLJ.predict(self_tuning_BT, X_test)[WINDOW_SIZE]
-        pred_RF = MLJ.predict(self_tuning_RF, X_test)[WINDOW_SIZE]
-        pred_XGB = MLJ.predict(self_tuning_XGB, X_test)[WINDOW_SIZE]
+        std_pred_lasso = MLJ.predict(lasso, X_test)[WINDOW_SIZE]
+        std_pred_BT = MLJ.predict(self_tuning_BT, X_test)[WINDOW_SIZE]
+        std_pred_RF = MLJ.predict(self_tuning_RF, X_test)[WINDOW_SIZE]
+        std_pred_XGB = MLJ.predict(self_tuning_XGB, X_test)[WINDOW_SIZE]
 
-        #TODO unstandardise
+        #TODO unstandardise??
+        pred_lasso =
+        pred_BT =
+        pred_RF =
+        pred_XGB =
+
         append!(preds_lasso_daily, pred_lasso)
         append!(preds_BT_daily, pred_BT)
         append!(preds_RF_daily, pred_RF)
