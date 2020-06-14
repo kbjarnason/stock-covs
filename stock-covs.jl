@@ -62,7 +62,6 @@ function timeRangeInt(startTime::Int, endTime::Int)
 end
 
 #Credit to chris-b1 https://gist.github.com/chris-b1/50fffa29bf03ab8a6e3925a35b1bab90
-ffill(a::AbstractArray) = copy(a)
 function ffill(a::AbstractArray{Union{Missing, T}}) where {T}
     res = similar(a, T)
     if ismissing(first(a))
@@ -79,6 +78,11 @@ function ffill(a::AbstractArray{Union{Missing, T}}) where {T}
         res[i] = fillval
     end
     res
+end
+
+#function to annualise returns
+function annualise(rate::Float, days::Int)
+    return ((1 + rate)**(1/days))**252 - 1
 end
 
 #%%md
@@ -362,75 +366,124 @@ CSV.write("preds_RF_tuned.csv", DataFrame(preds_RF))
 CSV.write("preds_XGB_tuned.csv", DataFrame(preds_XGB))
 
 #%%md
+Read in predictions
+#%%
+cd("/Users/kristianbjarnason/Documents/Programming/Data/stocks-cov:var/")
+db_trans = CSV.read("db_trans.csv")
+preds_lasso = CSV.read("preds_lasso.csv")
+preds_BT = CSV.read("preds_BT_tuned.csv")
+preds_RF = CSV.read("preds_RF_tuned.csv")
+preds_XGB = CSV.read("preds_XGB_tuned.csv")
+
+
+#%%md
 Plot Predictions
 #%%
 plot(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS]), title="True RCs")
-plot(preds_lasso, title="Lasso Predicted RCs")
-plot(preds_BT, title="BT Predicted RCs"
-plot(preds_RF, title="RF Predicted RCs")
-plot(preds_XGB, title="XGB Predicted RCs")
+plot(Array(preds_lasso), title="Lasso Predicted RCs")
+plot(Array(preds_BT), title="BT Predicted RCs")
+plot(Array(preds_RF), title="RF Predicted RCs")
+plot(Array(preds_XGB), title="XGB Predicted RCs")
 
 #%%md
 Checking fit (RMSs, MAEs, R-Squared scores)
 #%%md
 RMSs
 #%%
-MLJBase.rms(vec(preds_lasso), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
-MLJBase.rms(vec(preds_BT), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
-MLJBase.rms(vec(preds_RF), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
-MLJBase.rms(vec(preds_XGB), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
+MLJBase.rms(vec(Array(preds_lasso)), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
+MLJBase.rms(vec(Array(preds_BT)), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
+MLJBase.rms(vec(Array(preds_RF)), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
+MLJBase.rms(vec(Array(preds_XGB)), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
 
 #%%md
 MAEs
 #%%
-MLJBase.mae(vec(preds_lasso), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
-MLJBase.mae(vec(preds_BT), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
-MLJBase.mae(vec(preds_RF), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
-MLJBase.mae(vec(preds_XGB), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
+MLJBase.mae(vec(Array(preds_lasso)), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
+MLJBase.mae(vec(Array(preds_BT)), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
+MLJBase.mae(vec(Array(preds_RF)), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
+MLJBase.mae(vec(Array(preds_XGB)), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
 
 #%%md
-want the stuff below?? maybe implement later...
+***TBD***
+Check performance of predictions on returns
+#%%md
+Import Predictions
+#%%
+lassoDF = CSV.read("preds_lasso.csv")
+BTDF = CSV.read("preds_BT_tuned.csv")
+RFDF = CSV.read('preds_RF_tuned.csv')
+xgbDF = CSV.read("preds_xgb_tuned.csv")
 
 #%%md
 Construct a global minimum variance portfolio (GMVP) based on the forecasts. Derive the weights of the portfolios as a function of the covariance matrix of the returns.
 #%%
-GMVPs_ols = Array{}
-GMVPs_lasso = Array{}
-GMVPs_BT = Array{}
-GMVPs_RF = Array{}
-GMVPs_xgb = Array{}
+GMVPs_lasso = Array{}()(undef, 1300, 4)
+GMVPs_BT = Array{}()(undef, 1300, 4)
+GMVPs_RF = Array{}()(undef, 1300, 4)
+GMVPs_xgb = Array{}()(undef, 1300, 4)
 
-ONE4 = Matrix{}([1],[1],[1],[1])
+minvars_lasso = Array{}(undef, 1300, 1)
+minvars_BT = Array{}(undef, 1300, 1)
+minvars_RF = Array{}(undef, 1300, 1)
+minvars_xgb = Array{}(undef, 1300, 1)
+
+ONE4 = ones(Float64, (4,1))
 ONE4T = ONE4'
 
 for i in 1:length(dates) - WINDOW_SIZE
-    cov_ols = Matrix(
+    cov_lasso = Matrix{}([[lassoDF[i, 0],lassoDF[i, 1],lassoDF[i, 2],lassoDF[i, 3]],
+                          [lassoDF[i, 1],lassoDF[i, 4],lassoDF[i, 5],lassoDF[i, 6]],
+                          [lassoDF[i, 2],lassoDF[i, 5],lassoDF[i, 7],lassoDF[i, 8]],
+                          [lassoDF[i, 3],lassoDF[i, 6],lassoDF[i, 8],lassoDF[i, 9]]])
+
+
+equal = Matrix{}(1/4, 1300, 4)
+
+GMVPs = GMVPs_lasso, GMVPs_BT, GMVPs_RF, GMVPs_xgb
 
 #%%md
 Compare the out-of-sample performance of the GMVPs with a equally-weighted portfolio. You should consider four statistics: accumulated return, standard deviation, Sharpe ratio and 5% Value-at-Risk.
 #%%md
 Import risk-free rate data
+
+***The risk-free rates are actually annualized, so you'd need to divide by 365 to get the daily rate
 #%%
-rf = CSV.Read("DGS3MO.csv")
+rf = CSV.read("DGS3MO.csv")
 
 #%%md
-Get daily closing prices for each stock/index
+Get daily log returns for each stock/index
 #%%
+LR_stocks = DataFrame()
+
+#%%md
+Construct DataFrame to store log returns
+#%%
+LR_strats  = DataFrame()
 
 #%%md
 Calculate log return for each strategy
 #%%
-
+for (x,strat) in enumerate(cols(LR_strats))
+    LR_strats[,] =
+end
 
 #%%md
 Accumulated Returns
 #%%
-
+lasso_AR = float(np.sum(keys[1]['LR']))
+BT_AR = float(np.sum(keys[2]['LR']))
+RF_AR = float(np.sum(keys[3]['LR']))
+xgb_AR = float(np.sum(keys[7]['LR']))
+equal_AR = float(np.sum(keys[8]['LR']))
 
 #%%md
 Standard Deviations
 #%%
-
+lasso_SD = np.std(keys[1]['LR'])
+BT_SD = np.std(keys[2]['LR'])
+RF_SD = np.std(keys[3]['LR'])
+xgb_SD = np.std(keys[7]['LR'])
+equal_SD = np.std(keys[8]['LR'])
 
 #%%md
 Sharpe Ratios
@@ -440,8 +493,27 @@ Sharpe Ratios
 #%%md
 5% VaRs
 #%%
+fifth_percentile_index =  Int(0.05 * length(keys[0]['LR']))
 
+lasso_VaR = float(sorted(keys[1]['LR'])[fifth_percentile_index])
+BT_VaR = float(sorted(keys[2]['LR'])[fifth_percentile_index])
+RF_VaR = float(sorted(keys[3]['LR'])[fifth_percentile_index])
+xgb_VaR = float(sorted(keys[7]['LR'])[fifth_percentile_index])
+equal_VaR = float(sorted(keys[8]['LR'])[fifth_percentile_index])
 
 #%%md
 NAVs
 #%%
+lasso_NAV = np.exp(np.cumsum(keys[1]['LR'].astype(float)))
+BT_NAV = np.exp(np.cumsum(keys[2]['LR'].astype(float)))
+RF_NAV = np.exp(np.cumsum(keys[3]['LR'].astype(float)))
+xgb_NAV = np.exp(np.cumsum(keys[7]['LR'].astype(float)))
+equal_NAV = np.exp(np.cumsum(keys[8]['LR'].astype(float)))
+
+plt.plot(lasso_NAV, title="lasso NAV")
+plt.plot(BT_NAV, title="BT NAV")
+plt.plot(RF_NAV, title="RF NAV")
+plt.plot(xgb_NAV, title="XGB NAV")
+plt.plot(equal_NAV, title="Equally Weighted NAV")
+
+#END
