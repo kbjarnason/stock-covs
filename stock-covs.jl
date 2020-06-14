@@ -388,11 +388,6 @@ MLJBase.mae(vec(preds_BT), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS
 MLJBase.mae(vec(preds_RF), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
 MLJBase.mae(vec(preds_XGB), vec(Array(db_trans[WINDOW_SIZE+1:nrows(db),1:NUM_COVS])))
 
-
-
-
-
-
 #%%md
 want the stuff below?? maybe implement later...
 
